@@ -1,0 +1,1436 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Medicine Identification System</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f3f6fa;
+            color: #263445;
+        }
+
+        header {
+            background: #176b57;
+            color: white;
+            padding: 24px;
+            text-align: center;
+        }
+
+        main {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 15px;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 22px;
+            box-shadow: 0 3px 12px rgba(0,0,0,.06);
+        }
+
+        h2 {
+            color: #176b57;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid #ccd5dd;
+            border-radius: 7px;
+            font-size: 15px;
+        }
+
+        button {
+            background: #176b57;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 15px;
+            margin-top: 8px;
+        }
+
+        button:hover {
+            background: #10513f;
+        }
+
+        button:disabled {
+            opacity: .6;
+            cursor: not-allowed;
+        }
+
+        .secondary {
+            background: #356c9c;
+        }
+
+        .secondary:hover {
+            background: #244f75;
+        }
+
+        .voice-stop {
+            background: #a94442;
+        }
+
+        .voice-stop:hover {
+            background: #873432;
+        }
+
+        .result {
+            background: #f2f8f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            overflow-wrap: anywhere;
+        }
+
+        .medicine {
+            border-left: 4px solid #176b57;
+            padding: 12px;
+            margin: 12px 0;
+            background: #f8faf9;
+            overflow-wrap: anywhere;
+        }
+
+        .warning {
+            color: #9a5700;
+            background: #fff7e6;
+            padding: 15px;
+            border-radius: 7px;
+            margin-top: 15px;
+        }
+
+        #chatMessages {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 10px;
+            background: #f6f8fa;
+            border-radius: 8px;
+        }
+
+        .message {
+            padding: 12px;
+            border-radius: 8px;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .user {
+            background: #dceee8;
+        }
+
+        .bot {
+            background: #e7edf5;
+        }
+
+        .message-text {
+            line-height: 1.6;
+        }
+
+        .voice-controls,
+        .camera-controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .voice-controls button,
+        .camera-controls button {
+            margin-top: 0;
+        }
+
+        .status {
+            margin-top: 12px;
+            color: #555;
+        }
+
+        #micButton.listening {
+            background: #a94442;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            50% {
+                opacity: .6;
+            }
+        }
+
+        #cameraContainer,
+        #capturedPreview {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .camera-preview {
+            width: 100%;
+            max-width: 550px;
+            background: #202020;
+            border-radius: 10px;
+            margin-top: 12px;
+            overflow: hidden;
+        }
+
+        .camera-preview video,
+        .camera-preview img {
+            width: 100%;
+            display: block;
+        }
+
+        #capturedImage {
+            object-fit: contain;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        @media (max-width: 600px) {
+            .card {
+                padding: 18px;
+            }
+
+            button {
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>Medicine Identification System</h1>
+    <p>AI-Assisted Medicine Information and Identification</p>
+</header>
+
+<main>
+
+    <!-- =====================================
+         MEDICINE IDENTIFICATION
+    ====================================== -->
+
+    <section class="card">
+
+        <h2>1. Identify Medicine</h2>
+
+        <p>
+            Upload a medicine picture or use your camera
+            to capture the medicine packaging.
+        </p>
+
+        <form id="identifyForm">
+
+            <label for="medicineImage">
+                Select Medicine Image:
+            </label>
+
+            <input
+                type="file"
+                id="medicineImage"
+                name="medicine_image"
+                accept="image/png,image/jpeg,image/webp"
+                required
+            >
+
+            <button type="submit" id="identifyButton">
+                Identify Medicine
+            </button>
+
+        </form>
+
+        <!-- CAMERA BUTTON -->
+
+        <div class="camera-controls">
+
+            <button
+                type="button"
+                id="openCameraButton"
+                class="secondary">
+
+                📷 Open Camera
+
+            </button>
+
+        </div>
+
+        <!-- CAMERA PREVIEW -->
+
+        <div id="cameraContainer">
+
+            <h3>Live Camera Preview</h3>
+
+            <div class="camera-preview">
+
+                <video
+                    id="cameraVideo"
+                    autoplay
+                    playsinline>
+                </video>
+
+            </div>
+
+            <div class="camera-controls">
+
+                <button
+                    type="button"
+                    id="captureButton">
+
+                    📸 Capture Photo
+
+                </button>
+
+                <button
+                    type="button"
+                    id="closeCameraButton"
+                    class="voice-stop">
+
+                    Close Camera
+
+                </button>
+
+            </div>
+
+        </div>
+
+        <!-- CAPTURED IMAGE -->
+
+        <div id="capturedPreview">
+
+            <h3>Captured Medicine Image</h3>
+
+            <div class="camera-preview">
+
+                <img
+                    id="capturedImage"
+                    alt="Captured medicine image">
+
+            </div>
+
+            <div class="camera-controls">
+
+                <button
+                    type="button"
+                    id="retakeButton"
+                    class="secondary">
+
+                    Retake Photo
+
+                </button>
+
+            </div>
+
+        </div>
+
+        <canvas id="cameraCanvas" hidden></canvas>
+
+        <p id="identifyStatus" class="status"></p>
+
+        <div id="identificationResults"></div>
+
+    </section>
+
+
+    <!-- =====================================
+         MEDICINE AI CHATBOT
+    ====================================== -->
+
+    <section class="card">
+
+        <h2>2. Medicine AI Chatbot</h2>
+
+        <p>
+            Ask general educational questions about
+            medicine information.
+        </p>
+
+        <label for="language">
+            Select Response Language:
+        </label>
+
+        <select id="language">
+
+            <option value="English">English</option>
+
+            <option value="Filipino">Filipino</option>
+
+            <option value="Cebuano">Cebuano (Bisaya)</option>
+
+        </select>
+
+        <!-- CHAT MESSAGES -->
+
+        <div id="chatMessages">
+
+            <div class="message bot">
+
+                <div class="message-text">
+
+                    Hello! I can provide general educational
+                    information about medicines. How can I help you?
+
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- QUESTION INPUT -->
+
+        <textarea
+            id="question"
+            rows="3"
+            placeholder="Type or speak your medicine question here...">
+        </textarea>
+
+        <!-- MICROPHONE AND SEND BUTTONS -->
+
+        <div class="voice-controls">
+
+            <button
+                type="button"
+                id="micButton"
+                class="secondary">
+
+                🎤 Speak Question
+
+            </button>
+
+            <button
+                type="button"
+                id="sendButton">
+
+                Send Question
+
+            </button>
+
+        </div>
+
+        <p id="chatStatus" class="status"></p>
+
+    </section>
+
+
+    <!-- =====================================
+         MEDICAL NOTICE
+    ====================================== -->
+
+    <section class="warning">
+
+        <strong>Important Medical Notice:</strong>
+
+        <p>
+            This system provides general educational
+            information only.
+        </p>
+
+        <p>
+            Identification results are possible matches,
+            not confirmation that a medicine is genuine
+            or safe.
+        </p>
+
+        <p>
+            Always check the original packaging and consult
+            a pharmacist or healthcare professional.
+        </p>
+
+        <p>
+            Do not use the chatbot for emergencies or as
+            a substitute for professional medical advice.
+        </p>
+
+    </section>
+
+</main>
+
+<footer>
+
+    Medicine Identification System |
+    Student Research Prototype
+
+</footer>
+
+
+<script>
+
+// ========================================
+// GLOBAL VARIABLES
+// ========================================
+
+let currentMedicineContext = "";
+
+let currentAudio = null;
+
+let currentAudioUrl = null;
+
+let cameraStream = null;
+
+let recognition = null;
+
+let isListening = false;
+
+const identifyForm =
+    document.getElementById("identifyForm");
+
+const chatMessages =
+    document.getElementById("chatMessages");
+
+const cameraVideo =
+    document.getElementById("cameraVideo");
+
+const cameraContainer =
+    document.getElementById("cameraContainer");
+
+const capturedPreview =
+    document.getElementById("capturedPreview");
+
+const cameraCanvas =
+    document.getElementById("cameraCanvas");
+
+const medicineImageInput =
+    document.getElementById("medicineImage");
+
+const micButton =
+    document.getElementById("micButton");
+
+
+// ========================================
+// HTML ESCAPE
+// ========================================
+
+function escapeHTML(value) {
+
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+
+    })[char]);
+
+}
+
+
+// ========================================
+// CAMERA FUNCTIONALITY
+// ========================================
+
+// OPEN CAMERA
+
+document.getElementById("openCameraButton")
+.addEventListener("click", async function() {
+
+    try {
+
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+
+            throw new Error(
+                "Camera is not supported. Use localhost or HTTPS."
+            );
+
+        }
+
+        stopCamera();
+
+        cameraStream =
+            await navigator.mediaDevices.getUserMedia({
+
+                video: {
+                    facingMode: { ideal: "environment" }
+                },
+
+                audio: false
+
+            });
+
+        cameraVideo.srcObject = cameraStream;
+
+        await cameraVideo.play();
+
+        cameraContainer.style.display = "block";
+
+        capturedPreview.style.display = "none";
+
+        document.getElementById("identifyStatus")
+        .textContent = "Camera is ready. Position the medicine clearly.";
+
+    }
+
+    catch (error) {
+
+        console.error("Camera Error:", error);
+
+        alert(
+            "Unable to open camera. Please allow camera permission."
+        );
+
+    }
+
+});
+
+
+// CAPTURE PHOTO
+
+document.getElementById("captureButton")
+.addEventListener("click", function() {
+
+    if (!cameraStream || !cameraVideo.videoWidth) {
+
+        alert("Camera is not ready.");
+
+        return;
+
+    }
+
+    cameraCanvas.width = cameraVideo.videoWidth;
+
+    cameraCanvas.height = cameraVideo.videoHeight;
+
+    const context = cameraCanvas.getContext("2d");
+
+    context.drawImage(
+        cameraVideo,
+        0,
+        0,
+        cameraCanvas.width,
+        cameraCanvas.height
+    );
+
+    cameraCanvas.toBlob(function(blob) {
+
+        if (!blob) {
+
+            alert("Unable to capture image.");
+
+            return;
+
+        }
+
+        const file = new File(
+            [blob],
+            "camera_medicine.jpg",
+            { type: "image/jpeg" }
+        );
+
+        const dataTransfer = new DataTransfer();
+
+        dataTransfer.items.add(file);
+
+        medicineImageInput.files = dataTransfer.files;
+
+        document.getElementById("capturedImage").src =
+            URL.createObjectURL(blob);
+
+        capturedPreview.style.display = "block";
+
+        document.getElementById("identifyStatus")
+        .textContent =
+            "Photo captured successfully. Click Identify Medicine.";
+
+        stopCamera();
+
+    }, "image/jpeg", 0.90);
+
+});
+
+
+// STOP CAMERA
+
+function stopCamera() {
+
+    if (cameraStream) {
+
+        cameraStream.getTracks().forEach(track => {
+
+            track.stop();
+
+        });
+
+        cameraStream = null;
+
+    }
+
+    cameraVideo.srcObject = null;
+
+    cameraContainer.style.display = "none";
+
+}
+
+
+// CLOSE CAMERA
+
+document.getElementById("closeCameraButton")
+.addEventListener("click", function() {
+
+    stopCamera();
+
+});
+
+
+// RETAKE PHOTO
+
+document.getElementById("retakeButton")
+.addEventListener("click", function() {
+
+    medicineImageInput.value = "";
+
+    capturedPreview.style.display = "none";
+
+    document.getElementById("openCameraButton").click();
+
+});
+
+
+// RELEASE CAMERA WHEN LEAVING PAGE
+
+window.addEventListener("pagehide", stopCamera);
+
+
+// ========================================
+// MEDICINE IMAGE IDENTIFICATION
+// ========================================
+
+identifyForm.addEventListener("submit", async function(event) {
+
+    event.preventDefault();
+
+    const status =
+        document.getElementById("identifyStatus");
+
+    const results =
+        document.getElementById("identificationResults");
+
+    const button =
+        document.getElementById("identifyButton");
+
+    if (!medicineImageInput.files.length) {
+
+        status.textContent = "Please select or capture an image.";
+
+        return;
+
+    }
+
+    const file = medicineImageInput.files[0];
+
+    const formData = new FormData();
+
+    formData.append("medicine_image", file);
+
+    status.textContent = "Processing image. Please wait...";
+
+    results.innerHTML = "";
+
+    currentMedicineContext = "";
+
+    button.disabled = true;
+
+    try {
+
+        const response = await fetch("/identify", {
+
+            method: "POST",
+
+            body: formData
+
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error || "Identification failed."
+            );
+
+        }
+
+        status.textContent =
+            data.message || "Identification completed.";
+
+        let html = `
+
+            <div class="result">
+
+                <h3>Extracted Text</h3>
+
+                <p>
+                    ${escapeHTML(
+                        data.extracted_text || "No readable text found."
+                    )}
+                </p>
+
+            </div>
+
+        `;
+
+        if (data.matches && data.matches.length > 0) {
+
+            html += "<h3>Possible Medicine Matches</h3>";
+
+            data.matches.forEach(medicine => {
+
+                html += `
+
+                    <div class="medicine">
+
+                        <h3>
+                            ${escapeHTML(
+                                medicine.brand_name || "Unknown Medicine"
+                            )}
+                        </h3>
+
+                        <p>
+                            <strong>Generic Name:</strong>
+                            ${escapeHTML(
+                                medicine.generic_name || "Not available"
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Medicine Type:</strong>
+                            ${escapeHTML(
+                                medicine.medicine_type || "Not available"
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Common Uses:</strong>
+                            ${escapeHTML(
+                                medicine.common_uses || "Not available"
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Warnings:</strong>
+                            ${escapeHTML(
+                                medicine.warnings || "Not available"
+                            )}
+                        </p>
+
+                        <p>
+                            <strong>Match Type:</strong>
+                            ${escapeHTML(
+                                medicine.match_type || "Possible Match"
+                            )}
+                        </p>
+
+                        <button
+                            type="button"
+                            class="secondary"
+                            onclick="speakMedicine(this)">
+
+                            🔊 Read Information
+
+                        </button>
+
+                    </div>
+
+                `;
+
+                currentMedicineContext +=
+                    JSON.stringify(medicine) + "\n";
+
+            });
+
+        } else {
+
+            html += `
+
+                <div class="result">
+
+                    No matching medicine was found in the database.
+
+                    Please try a clearer image or verify the
+                    medicine packaging manually.
+
+                </div>
+
+            `;
+
+        }
+
+        results.innerHTML = html;
+
+    }
+
+    catch (error) {
+
+        console.error("Identification Error:", error);
+
+        status.textContent = "Error: " + error.message;
+
+    }
+
+    finally {
+
+        button.disabled = false;
+
+    }
+
+});
+
+
+// ========================================
+// GEMINI TEXT-TO-SPEECH
+// ========================================
+
+async function speakText(text) {
+
+    const language =
+        document.getElementById("language").value;
+
+    stopAIResponse();
+
+    try {
+
+        const response = await fetch("/speak", {
+
+            method: "POST",
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+
+                text: text,
+
+                language: language
+
+            })
+
+        });
+
+        if (!response.ok) {
+
+            let errorMessage = "Speech generation failed.";
+
+            try {
+
+                const errorData = await response.json();
+
+                errorMessage =
+                    errorData.error || errorMessage;
+
+            }
+
+            catch (_) {}
+
+            throw new Error(errorMessage);
+
+        }
+
+        const audioBlob = await response.blob();
+
+        if (!audioBlob.size) {
+
+            throw new Error("Generated audio is empty.");
+
+        }
+
+        currentAudioUrl =
+            URL.createObjectURL(audioBlob);
+
+        currentAudio = new Audio(currentAudioUrl);
+
+        currentAudio.onended = function() {
+
+            stopAIResponse();
+
+        };
+
+        currentAudio.onerror = function() {
+
+            stopAIResponse();
+
+            alert("Unable to play generated audio.");
+
+        };
+
+        await currentAudio.play();
+
+    }
+
+    catch (error) {
+
+        console.error("TTS Error:", error);
+
+        alert("Voice feedback error: " + error.message);
+
+        stopAIResponse();
+
+    }
+
+}
+
+
+// ========================================
+// MEDICINE VOICE FEEDBACK
+// ========================================
+
+function speakMedicine(button) {
+
+    const medicine = button.parentElement;
+
+    const clone = medicine.cloneNode(true);
+
+    const readButton = clone.querySelector("button");
+
+    if (readButton) {
+        readButton.remove();
+    }
+
+    speakText(clone.innerText);
+
+}
+
+
+// ========================================
+// AI RESPONSE VOICE FEEDBACK
+// ========================================
+
+function speakAIResponse(button) {
+
+    const message = button.closest(".message");
+
+    if (!message) return;
+
+    const text =
+        message.querySelector(".message-text");
+
+    if (text) {
+
+        speakText(text.innerText);
+
+    }
+
+}
+
+
+// ========================================
+// STOP VOICE FEEDBACK
+// ========================================
+
+function stopAIResponse() {
+
+    if (currentAudio) {
+
+        currentAudio.pause();
+
+        currentAudio.currentTime = 0;
+
+        currentAudio = null;
+
+    }
+
+    if (currentAudioUrl) {
+
+        URL.revokeObjectURL(currentAudioUrl);
+
+        currentAudioUrl = null;
+
+    }
+
+}
+
+
+// ========================================
+// SEND QUESTION TO GEMINI
+// ========================================
+
+async function sendQuestion() {
+
+    const questionInput =
+        document.getElementById("question");
+
+    const language =
+        document.getElementById("language").value;
+
+    const sendButton =
+        document.getElementById("sendButton");
+
+    const chatStatus =
+        document.getElementById("chatStatus");
+
+    const question =
+        questionInput.value.trim();
+
+    if (!question) {
+
+        alert("Please enter or speak a question.");
+
+        return;
+
+    }
+
+    stopAIResponse();
+
+    addMessage(question, "user");
+
+    questionInput.value = "";
+
+    sendButton.disabled = true;
+
+    chatStatus.textContent =
+        "AI is preparing your answer...";
+
+    const loading = document.createElement("div");
+
+    loading.className = "message bot";
+
+    loading.textContent = "Please wait...";
+
+    chatMessages.appendChild(loading);
+
+    chatMessages.scrollTop =
+        chatMessages.scrollHeight;
+
+    try {
+
+        const response = await fetch("/chat", {
+
+            method: "POST",
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+
+                question: question,
+
+                language: language,
+
+                medicine_context: currentMedicineContext
+
+            })
+
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.answer || data.error || "Chatbot request failed."
+            );
+
+        }
+
+        loading.remove();
+
+        addMessage(
+            data.answer || "The AI did not return an answer.",
+            "bot"
+        );
+
+        chatStatus.textContent = "Response received.";
+
+    }
+
+    catch (error) {
+
+        loading.textContent =
+            "Error: " + error.message;
+
+        chatStatus.textContent =
+            "Unable to get AI response.";
+
+    }
+
+    finally {
+
+        sendButton.disabled = false;
+
+        questionInput.focus();
+
+    }
+
+}
+
+
+// ========================================
+// DISPLAY CHAT MESSAGES
+// ========================================
+
+function addMessage(text, type) {
+
+    const message = document.createElement("div");
+
+    message.className = "message " + type;
+
+    const messageText = document.createElement("div");
+
+    messageText.className = "message-text";
+
+    messageText.textContent = String(text ?? "");
+
+    message.appendChild(messageText);
+
+    if (type === "bot") {
+
+        const controls = document.createElement("div");
+
+        controls.className = "voice-controls";
+
+        const listenButton = document.createElement("button");
+
+        listenButton.type = "button";
+
+        listenButton.textContent = "🔊 Listen";
+
+        listenButton.onclick = function() {
+
+            speakAIResponse(this);
+
+        };
+
+        const stopButton = document.createElement("button");
+
+        stopButton.type = "button";
+
+        stopButton.className = "voice-stop";
+
+        stopButton.textContent = "⏹ Stop";
+
+        stopButton.onclick = stopAIResponse;
+
+        controls.appendChild(listenButton);
+
+        controls.appendChild(stopButton);
+
+        message.appendChild(controls);
+
+    }
+
+    chatMessages.appendChild(message);
+
+    chatMessages.scrollTop =
+        chatMessages.scrollHeight;
+
+}
+
+
+// ========================================
+// MICROPHONE SPEECH RECOGNITION
+// ========================================
+
+const SpeechRecognition =
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
+
+
+// LANGUAGE SETTINGS
+
+function getSpeechLanguage() {
+
+    const language =
+        document.getElementById("language").value;
+
+    const speechLanguages = {
+
+        English: "en-US",
+
+        Filipino: "fil-PH",
+
+        Cebuano: "ceb-PH"
+
+    };
+
+    return speechLanguages[language] || "en-US";
+
+}
+
+
+// MICROPHONE BUTTON
+
+micButton.addEventListener("click", function() {
+
+    if (!SpeechRecognition) {
+
+        alert(
+            "Speech recognition is not supported by this browser. " +
+            "Please use an updated version of Google Chrome."
+        );
+
+        return;
+
+    }
+
+    if (isListening && recognition) {
+
+        recognition.stop();
+
+        return;
+
+    }
+
+    recognition = new SpeechRecognition();
+
+    recognition.lang = getSpeechLanguage();
+
+    recognition.continuous = false;
+
+    recognition.interimResults = false;
+
+    recognition.maxAlternatives = 1;
+
+
+    // SPEECH STARTED
+
+    recognition.onstart = function() {
+
+        isListening = true;
+
+        micButton.textContent = "🔴 Listening...";
+
+        micButton.classList.add("listening");
+
+        document.getElementById("chatStatus")
+        .textContent = "Listening. Please speak your question.";
+
+    };
+
+
+    // SPEECH RECOGNIZED
+
+    recognition.onresult = function(event) {
+
+        const spokenText =
+            event.results[0][0].transcript;
+
+        document.getElementById("question").value =
+            spokenText;
+
+        document.getElementById("chatStatus")
+        .textContent =
+            "Speech converted to text. Click Send Question.";
+
+    };
+
+
+    // SPEECH ERRORS
+
+    recognition.onerror = function(event) {
+
+        console.error("Microphone Error:", event.error);
+
+        if (event.error === "not-allowed") {
+
+            document.getElementById("chatStatus")
+            .textContent = "Please allow microphone access.";
+
+        }
+
+        else if (event.error === "no-speech") {
+
+            document.getElementById("chatStatus")
+            .textContent = "No speech detected. Please try again.";
+
+        }
+
+        else {
+
+            document.getElementById("chatStatus")
+            .textContent =
+                "Speech recognition error: " + event.error;
+
+        }
+
+    };
+
+
+    // SPEECH ENDED
+
+    recognition.onend = function() {
+
+        isListening = false;
+
+        micButton.textContent = "🎤 Speak Question";
+
+        micButton.classList.remove("listening");
+
+    };
+
+
+    try {
+
+        recognition.start();
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        alert("Unable to start microphone.");
+
+    }
+
+});
+
+
+// ========================================
+// SEND BUTTON
+// ========================================
+
+document.getElementById("sendButton")
+.addEventListener("click", sendQuestion);
+
+
+// ========================================
+// ENTER KEY TO SEND QUESTION
+// ========================================
+
+document.getElementById("question")
+.addEventListener("keydown", function(event) {
+
+    if (event.key === "Enter" && !event.shiftKey) {
+
+        event.preventDefault();
+
+        sendQuestion();
+
+    }
+
+});
+
+
+// ========================================
+// PAGE INITIALIZATION
+// ========================================
+
+console.log("Medicine Identification System loaded.");
+
+console.log("Camera functionality ready.");
+
+console.log("Microphone functionality ready.");
+
+console.log("Gemini chatbot functionality ready.");
+
+</script>
+
+</body>
+</html>
