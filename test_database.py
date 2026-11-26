@@ -1,28 +1,20 @@
 
-import mysql.connector
+from database import get_connection
 
 try:
-    connection = mysql.connector.connect(
-        host="localhost",
-        port=3306,
-        user="root",
-        password="stem123",
-        database="medicine_system"
-    )
+    connection = get_connection()
 
-    print("Connected to MySQL successfully!")
+    if connection and connection.is_connected():
+        print("Connected to MySQL successfully!")
 
-    cursor = connection.cursor()
-    cursor.execute("SELECT brand_name, generic_name FROM medicines")
+        cursor = connection.cursor()
+        cursor.execute("SELECT DATABASE()")
+        result = cursor.fetchone()
 
-    medicines = cursor.fetchall()
+        print("Connected database:", result[0])
 
-    for medicine in medicines:
-        print("Brand name:", medicine[0])
-        print("Generic name:", medicine[1])
+        cursor.close()
+        connection.close()
 
-    cursor.close()
-    connection.close()
-
-except mysql.connector.Error as error:
-    print("Database connection failed:", error)
+except Exception as error:
+    print("Database test failed:", error)

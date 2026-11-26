@@ -1,378 +1,626 @@
 
 import os
-import io
 import re
-from difflib import SequenceMatcher
+import json
+import wave
+import traceback
+import time
 
-from flask import Flask, request, render_template, jsonify
-from PIL import Image, ImageOps, ImageEnhance
-import pytesseract
-import mysql.connector
-from dotenv import load_dotenv
-from google import genai
 
-load_dotenv()
+from io import BytesIO
+from google.genai import types
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
-
-# Tesseract OCR location on Windows
-pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file
 )
 
-# Gemini configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+from rapidfuzz import fuzz
 
-GEMINI_MODEL = "gemini-3-flash-preview"
+from google import genai
+from google.genai import types
+
+from config import (
+    SECRET_KEY,
+    DEBUG,
+    GEMINI_API_KEY
+)
+
+from database import get_all_medicines
+from ocr import extract_text
+from chatbot import ask_chatbot
 
 
-# MySQL database connection
-def get_connection():
-    password = os.getenv("MYSQL_PASSWORD")
+# =====================================================
+# FLASK CONFIGURATION
+# =====================================================
 
-    if not password:
-        raise ValueError("MYSQL_PASSWORD is missing from your .env file.")
+app = Flask(__name__)
 
-    return mysql.connector.connect(
-        host="localhost",
-        port=3306,
-        user="root",
-        password=password,
-        database="medicine_system"
+app.secret_key = SECRET_KEY or "medicine-identification-secret-key"
+
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+
+
+# Gemini models
+GEMINI_MODEL = "gemini-3.8-flash"
+TRANSCRIPTION_MODEL = "gemini-3.8-flash"
+TTS_MODEL = "gemini-3.8-flash-tts"
+
+
+# Gemini client
+client = None
+
+if GEMINI_API_KEY:
+    client = (
+    genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(
+            api_version="v1beta"
+        )
+    )
+    if GEMINI_API_KEY
+    else None
+)
+
+
+# =====================================================
+# HELPER FUNCTIONS
+# =====================================================
+
+def allowed_file(filename):
+    return (
+        "." in filename
+        and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
     )
 
 
-# Normalize text for better comparison
 def normalize_text(text):
-    text = str(text or "").lower()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return " ".join(text.split())
+    """Normalize text for medicine matching."""
+
+    if not text:
+        return ""
+
+    text = str(text).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
-# Compare two words and measure their similarity
-def word_similarity(word1, word2):
-    return SequenceMatcher(
-        None,
-        word1,
-        word2
-    ).ratio()
+def score_medicine(ocr_text, medicine):
+    """
+    Compare OCR text with medicine brand and generic names.
+    Brand and generic names receive priority.
+    """
+
+    normalized_ocr = normalize_text(ocr_text)
+
+    if not normalized_ocr:
+        return 0, "No match"
+
+    brand = normalize_text(medicine.get("brand_name", ""))
+    generic = normalize_text(medicine.get("generic_name", ""))
+
+    best_score = 0
+    match_type = "Possible match"
+
+    if brand:
+        if brand in normalized_ocr:
+            return 100, "Exact brand match"
+
+        score = fuzz.partial_ratio(brand, normalized_ocr)
+
+        if score > best_score:
+            best_score = score
+            match_type = "Brand name match"
+
+    if generic:
+        if generic in normalized_ocr:
+            score = 98
+
+            if score > best_score:
+                best_score = score
+                match_type = "Exact generic match"
+
+        else:
+            score = fuzz.partial_ratio(generic, normalized_ocr)
+
+            if score > best_score:
+                best_score = score
+                match_type = "Generic name match"
+
+    return best_score, match_type
 
 
-# Search for possible medicine matches
-def search_medicines(text):
+def parse_medicine_context(value):
+    """Convert frontend medicine context into usable data."""
 
-    ocr_text = normalize_text(text)
+    if isinstance(value, (dict, list)):
+        return value
 
-    if not ocr_text:
-        return []
-
-    ocr_words = set(
-        word for word in ocr_text.split()
-        if len(word) >= 4
-    )
-
-    if not ocr_words:
-        return []
-
-    connection = get_connection()
+    if not isinstance(value, str) or not value.strip():
+        return None
 
     try:
-        cursor = connection.cursor(dictionary=True)
+        parsed = json.loads(value)
 
-        cursor.execute("""
-            SELECT brand_name,
-                   generic_name,
-                   medicine_type,
-                   common_uses,
-                   warnings,
-                   source
-            FROM medicines
-        """)
+        if isinstance(parsed, (dict, list)):
+            return parsed
 
-        records = cursor.fetchall()
+    except (json.JSONDecodeError, TypeError):
+        pass
 
-        possible_matches = []
+    medicines = []
 
-        for medicine in records:
+    for line in value.splitlines():
+        try:
+            parsed = json.loads(line)
 
-            brand = normalize_text(medicine.get("brand_name"))
-            generic = normalize_text(medicine.get("generic_name"))
+            if isinstance(parsed, dict):
+                medicines.append(parsed)
 
-            # Only use brand and generic names for identification.
-            # Do not identify medicines using dosage or classification alone.
-            name_text = f"{brand} {generic}"
-            name_words = set(
-                word for word in name_text.split()
-                if len(word) >= 4
-            )
+        except (json.JSONDecodeError, TypeError):
+            continue
 
-            if not name_words:
-                continue
+    if medicines:
+        return medicines
 
-            # Exact full-name match
-            if (
-                (brand and brand in ocr_text)
-                or (generic and generic in ocr_text)
-            ):
-                medicine["_match_score"] = 1.0
-                possible_matches.append(medicine)
-                continue
-
-            # Check for OCR spelling errors
-            best_scores = []
-
-            for name_word in name_words:
-
-                best_score = max(
-                    (
-                        word_similarity(name_word, ocr_word)
-                        for ocr_word in ocr_words
-                    ),
-                    default=0
-                )
-
-                best_scores.append(best_score)
-
-            # Keep only strong name-word matches.
-            # Short words are excluded to reduce false matches.
-            strong_matches = [
-                score for score in best_scores
-                if score >= 0.88
-            ]
-
-            if strong_matches:
-
-                score = sum(strong_matches) / len(name_words)
-
-                if score >= 0.88:
-                    medicine["_match_score"] = score
-                    possible_matches.append(medicine)
-
-        # Highest matching scores appear first
-        possible_matches.sort(
-            key=lambda item: item["_match_score"],
-            reverse=True
-        )
-
-        return possible_matches[:10]
-
-    finally:
-        connection.close()
+    return value
 
 
-# Main page
-@app.route("/", methods=["GET"])
+
+def clean_tts_text(text):
+    """Remove Markdown formatting before generating speech."""
+
+    if not text:
+        return ""
+
+    text = str(text)
+
+    # Remove Markdown code blocks
+    text = re.sub(r"```[\s\S]*?```", " ", text)
+
+    # Remove inline code formatting
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+
+    # Keep link text but remove URLs
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+
+    # Remove Markdown formatting symbols
+    text = re.sub(r"[*#_~]", "", text)
+
+    # Remove excessive spaces
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
+
+def pcm_to_wav(audio_data, sample_rate=24000, channels=1, sample_width=2):
+    """Convert raw PCM audio into a WAV file."""
+
+    output = BytesIO()
+
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(audio_data)
+
+    output.seek(0)
+
+    return output
+
+
+# =====================================================
+# HOME PAGE
+# =====================================================
+
+@app.route("/")
 def home():
     return render_template("index.html")
 
 
-# Medicine image identification using OCR
+# =====================================================
+# MEDICINE IDENTIFICATION
+# =====================================================
+
 @app.route("/identify", methods=["POST"])
-def identify():
-
-    uploaded = request.files.get("medicine_image")
-
-    if not uploaded or not uploaded.filename:
-        return render_template(
-            "index.html",
-            error_message="Please choose a medicine image first."
-        )
+def identify_medicine():
 
     try:
-        image_data = uploaded.read()
+        if "medicine_image" not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "No medicine image was uploaded."
+            }), 400
 
-        if not image_data:
-            return render_template(
-                "index.html",
-                error_message="The uploaded image is empty."
+        image_file = request.files["medicine_image"]
+
+        if image_file.filename == "":
+            return jsonify({
+                "success": False,
+                "error": "Please select an image."
+            }), 400
+
+        if not allowed_file(image_file.filename):
+            return jsonify({
+                "success": False,
+                "error": "Unsupported image format."
+            }), 400
+
+        # Extract text using OCR
+        extracted_text = extract_text(image_file)
+
+        if isinstance(extracted_text, dict):
+            extracted_text = extracted_text.get("text", "")
+
+        extracted_text = str(extracted_text or "").strip()
+
+        if not extracted_text:
+            return jsonify({
+                "success": True,
+                "message": "No readable text was detected.",
+                "extracted_text": "",
+                "matches": []
+            })
+
+        # Retrieve medicines from MySQL
+        medicines = get_all_medicines()
+
+        if not medicines:
+            return jsonify({
+                "success": True,
+                "message": "No medicines are currently registered in the database.",
+                "extracted_text": extracted_text,
+                "matches": []
+            })
+
+        possible_matches = []
+
+        # Compare OCR text with database records
+        for medicine in medicines:
+
+            score, match_type = score_medicine(
+                extracted_text,
+                medicine
             )
 
-        image = Image.open(io.BytesIO(image_data))
+            if score >= 70:
 
-        image = ImageOps.exif_transpose(image)
-        image = image.convert("L")
-        image = ImageEnhance.Contrast(image).enhance(2)
+                possible_matches.append({
+                    "brand_name": medicine.get("brand_name", ""),
+                    "generic_name": medicine.get("generic_name", ""),
+                    "medicine_type": medicine.get("medicine_type", ""),
+                    "common_uses": medicine.get("common_uses", ""),
+                    "warnings": medicine.get("warnings", ""),
+                    "description": medicine.get("description", ""),
+                    "source": medicine.get("source", ""),
+                    "match_type": match_type,
+                    "match_score": score
+                })
 
-        # Improve OCR recognition
-        extracted_text = pytesseract.image_to_string(
-            image,
-            config="--oem 3 --psm 6"
+        # Highest matching scores first
+        possible_matches.sort(
+            key=lambda item: item["match_score"],
+            reverse=True
         )
 
-        if not extracted_text.strip():
-            return render_template(
-                "index.html",
-                error_message=(
-                    "No readable text was detected. "
-                    "Try a clearer, well-lit image of the medicine label."
-                )
-            )
+        # Return only the best five matches
+        possible_matches = possible_matches[:5]
 
-        # Search medicine database
-        matches = search_medicines(extracted_text)
+        if possible_matches:
+            message = "Possible medicine matches found."
+        else:
+            message = "No matching medicine was found in the database."
 
-        message = None
+        return jsonify({
+            "success": True,
+            "message": message,
+            "extracted_text": extracted_text,
+            "matches": possible_matches
+        })
 
-        if not matches:
-            message = (
-                "Text was successfully detected, but the medicine "
-                "brand name or generic name could not be matched "
-                "in the current database. Please upload a clearer "
-                "image showing the medicine name."
-            )
+    except Exception as error:
 
-        return render_template(
-            "index.html",
-            extracted_text=extracted_text,
-            matches=matches,
-            error_message=message
-        )
+        traceback.print_exc()
 
-    except Exception:
-        app.logger.exception("Medicine image processing failed")
-
-        return render_template(
-            "index.html",
-            error_message=(
-                "The image could not be processed, or the database "
-                "could not be reached. Check the VS Code terminal "
-                "for details."
-            )
-        )
+        return jsonify({
+            "success": False,
+            "error": "Medicine identification failed: " + str(error)
+        }), 500
 
 
-# Medicine information chatbot
+# =====================================================
+# GEMINI MEDICINE CHATBOT
+# =====================================================
+
 @app.route("/chat", methods=["POST"])
 def chat():
 
-    if client is None:
-        return jsonify({
-            "error": "Gemini API key is missing. Check your .env file."
-        }), 500
-
-    data = request.get_json(silent=True) or {}
-
-    question = str(data.get("question", "")).strip()
-    language = str(data.get("language", "English")).strip()
-
-    allowed_languages = {"English", "Filipino", "Cebuano"}
-
-    if language not in allowed_languages:
-        language = "English"
-
-    if not question:
-        return jsonify({
-            "error": "Please enter a question."
-        }), 400
-
-    if len(question) > 1000:
-        return jsonify({
-            "error": "Your question is too long. Please use 1000 characters or fewer."
-        }), 400
-
-    # Retrieve possible medicine information from MySQL
     try:
-        medicines = search_medicines(question)
+        data = request.get_json(silent=True) or {}
 
-        if medicines:
-            medicine_context = "\n".join(
-                (
-                    f"Brand: {m.get('brand_name')}; "
-                    f"Generic: {m.get('generic_name')}; "
-                    f"Type: {m.get('medicine_type')}; "
-                    f"Common uses: {m.get('common_uses')}; "
-                    f"Warnings: {m.get('warnings')}; "
-                    f"Source: {m.get('source')}"
-                )
-                for m in medicines
-            )
+        question = str(data.get("question", "")).strip()
+        language = data.get("language", "English")
 
-        else:
-            medicine_context = (
-                "No matching medicine record was found "
-                "in the local database."
-            )
-
-    except Exception:
-        app.logger.exception("Medicine database search failed")
-
-        medicine_context = (
-            "The medicine database could not be searched. "
-            "Do not claim that database information was verified."
+        medicine_context = parse_medicine_context(
+            data.get("medicine_context")
         )
 
-    # Gemini language and safety instructions
-    prompt = f"""
-You are an informational assistant for a student medicine-information
-prototype used in community stores.
+        if not question:
+            return jsonify({
+                "success": False,
+                "error": "Please enter a question."
+            }), 400
 
-MANDATORY LANGUAGE INSTRUCTIONS:
+        if not GEMINI_API_KEY:
+            return jsonify({
+                "success": False,
+                "error": "Gemini API key is missing. Check your .env file."
+            }), 500
 
-The user's selected language is: {language}.
-
-Write your entire answer in the selected language:
-
-English: Use English.
-Filipino: Use natural, understandable Filipino.
-Cebuano: Use natural Cebuano (Bisaya).
-
-Do not answer in another language just because the user
-asked the question in that language.
-
-Keep medicine names and technical terms accurate.
-Explain technical terms in the selected language.
-
-USER QUESTION:
-{question}
-
-LOCAL DATABASE INFORMATION:
-{medicine_context}
-
-SAFETY REQUIREMENTS:
-
-- Provide general educational information only.
-- Do not diagnose medical conditions or prescribe medicine.
-- Do not recommend a personal dosage or tell someone to start
-  or stop medicine.
-- Do not claim that OCR has definitively identified a medicine.
-- Clearly explain when information is unavailable or uncertain.
-- Do not invent medicine facts or sources.
-- Recommend consulting a licensed pharmacist or healthcare
-  professional for medicine selection, dosage, interactions,
-  pregnancy, children, allergies, and other personal concerns.
-- For a possible overdose, severe allergic reaction, or other
-  emergency, advise seeking urgent professional medical help.
-- Use simple, clear sentences.
-- Avoid unnecessary Markdown symbols and decorative formatting.
-"""
-
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
+        # Ask chatbot
+        answer = ask_chatbot(
+            question,
+            language,
+            medicine_context
         )
-
-        answer = response.text
 
         if not answer:
-            answer = (
-                "The AI did not return an answer. Please try again."
-            )
-
-        return jsonify({"answer": answer})
-
-    except Exception:
-        app.logger.exception("Gemini chatbot request failed")
+            return jsonify({
+                "success": False,
+                "error": "The chatbot did not return an answer."
+            }), 500
 
         return jsonify({
-            "error": (
-                "The AI chatbot could not answer right now. "
-                "Check the VS Code terminal for details."
-            )
-        }), 502
+            "success": True,
+            "answer": str(answer)
+        })
 
+    except Exception as error:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "error": "Chatbot error: " + str(error)
+        }), 500
+
+
+# =====================================================
+# GEMINI VOICE TRANSCRIPTION
+# =====================================================
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+
+    if not GEMINI_API_KEY or client is None:
+        return jsonify({
+            "success": False,
+            "error": "Gemini API key is missing."
+        }), 500
+
+    if "audio" not in request.files:
+        return jsonify({
+            "success": False,
+            "error": "No audio recording was received."
+        }), 400
+
+    audio_file = request.files["audio"]
+    audio_data = audio_file.read()
+
+    if not audio_data:
+        return jsonify({
+            "success": False,
+            "error": "The audio recording is empty."
+        }), 400
+
+    language = request.form.get("language", "English")
+    mime_type = audio_file.mimetype or "audio/webm"
+
+    prompt = (
+        "Transcribe the audio recording accurately. "
+        "The preferred language is " + language + ". "
+        "Return only the transcribed words. "
+        "Do not answer the question or add explanations."
+    )
+
+    # Automatically retry temporary Gemini errors
+    for attempt in range(3):
+
+        try:
+            response = client.models.generate_content(
+                model=TRANSCRIPTION_MODEL,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(
+                        data=audio_data,
+                        mime_type=mime_type
+                    )
+                ]
+            )
+
+            transcription = (response.text or "").strip()
+
+            if not transcription:
+                return jsonify({
+                    "success": False,
+                    "error": "No speech was detected. Please try again."
+                }), 500
+
+            return jsonify({
+                "success": True,
+                "transcription": transcription
+            })
+
+        except Exception as error:
+
+            error_message = str(error)
+
+            print(
+                f"Transcription attempt {attempt + 1} failed: "
+                f"{error_message}"
+            )
+
+            is_temporary_error = (
+                "503" in error_message
+                or "UNAVAILABLE" in error_message
+                or "429" in error_message
+                or "RESOURCE_EXHAUSTED" in error_message
+            )
+
+            if is_temporary_error and attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+            traceback.print_exc()
+
+            return jsonify({
+                "success": False,
+                "error": (
+                    "Gemini voice transcription is temporarily unavailable. "
+                    "Please wait a moment and try recording again."
+                    if is_temporary_error
+                    else "Voice transcription failed: " + error_message
+                )
+            }), 503
+
+    return jsonify({
+        "success": False,
+        "error": "Transcription failed. Please try again."
+    }), 503
+
+
+# =====================================================
+# GEMINI TEXT-TO-SPEECH
+# =====================================================
+
+@app.route("/speak", methods=["POST"])
+def speak():
+
+    try:
+        if not GEMINI_API_KEY or client is None:
+            return jsonify({
+                "success": False,
+                "error": "Gemini API key is missing."
+            }), 500
+
+        data = request.get_json(silent=True) or {}
+
+        text = clean_tts_text(data.get("text", ""))
+        language = data.get("language", "English")
+
+        if not text:
+            return jsonify({
+                "success": False,
+                "error": "There is no text to read."
+            }), 400
+
+        prompt = (
+            "Read the following text aloud clearly and naturally "
+            "in " + language + ". "
+            "Do not add extra words. "
+            "Text to read: " + text
+        )
+
+        response = client.models.generate_content(
+            model=TTS_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name="Kore"
+                        )
+                    )
+                )
+            )
+        )
+
+        audio_data = None
+
+        for candidate in (response.candidates or []):
+
+            content = candidate.content
+
+            if not content:
+                continue
+
+            for part in (content.parts or []):
+
+                if part.inline_data and part.inline_data.data:
+                    audio_data = part.inline_data.data
+                    break
+
+            if audio_data:
+                break
+
+        if not audio_data:
+            return jsonify({
+                "success": False,
+                "error": "Gemini did not return audio."
+            }), 500
+
+        # Gemini TTS normally returns raw 24 kHz PCM audio.
+        wav_audio = pcm_to_wav(audio_data)
+
+        return send_file(
+            wav_audio,
+            mimetype="audio/wav",
+            as_attachment=False,
+            download_name="medicine_speech.wav"
+        )
+
+    except Exception as error:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "error": "Text-to-speech failed: " + str(error)
+        }), 500
+
+
+# =====================================================
+# FILE SIZE ERROR
+# =====================================================
+
+@app.errorhandler(413)
+def file_too_large(error):
+
+    return jsonify({
+        "success": False,
+        "error": "Image is too large. Maximum upload size is 5 MB."
+    }), 413
+
+
+# =====================================================
+# RUN FLASK APPLICATION
+# =====================================================
 
 if __name__ == "__main__":
-    app.run(debug=True)
+
+    print("------------------------------------------")
+    print("MEDICINE IDENTIFICATION SYSTEM")
+    print("------------------------------------------")
+
+    if GEMINI_API_KEY:
+        print("Gemini API key: FOUND")
+    else:
+        print("Gemini API key: MISSING")
+
+    print("Starting Flask application...")
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=DEBUG
+    )

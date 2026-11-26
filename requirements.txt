@@ -1,0 +1,7 @@
+
+Flask
+mysql-connector-python
+Pillow
+pytesseract
+python-dotenv
+google-genai
